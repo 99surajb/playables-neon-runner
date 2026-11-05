@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Neon Runner</title>
+<!-- The Playables SDK must load first. It is the only external request allowed. -->
+<script src="https://www.youtube.com/game_api/v1"></script>
+<style>
+  :root {
+    --neon-blue: #00d2ff;
+    --neon-pink: #ff00ff;
+    --neon-purple: #9d00ff;
+    --bg-dark: #0a0b1e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent;
+       -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg-dark); }
+  body {
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none;
+  }
+  #game-container {
+    position: relative; width: 100%; height: 100%; max-width: 500px;
+    background: #000; overflow: hidden;
+    box-shadow: 0 0 50px rgba(0, 210, 255, 0.1);
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  
+  /* HUD */
+  #hud {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 0;
+    pointer-events: none; z-index: 5;
+  }
+  .hud-item { text-align: left; }
+  .hud-label { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.5); margin-bottom: 2px; }
+  .hud-value { font-size: 24px; font-weight: 900; color: var(--neon-blue); text-shadow: 0 0 10px var(--neon-blue); }
+  #speed-container { text-align: right; }
+  #speed-value { color: var(--neon-pink); text-shadow: 0 0 10px var(--neon-pink); }
+
+  /* Overlay UI */
+  #overlay {
+    position: absolute; inset: 0; z-index: 10; background: rgba(10, 11, 30, 0.85);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center; text-align: center; color: #fff;
+    transition: opacity 0.3s;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  
+  .menu-content { width: 85%; max-width: 320px; }
+  h1 { font-size: 42px; font-weight: 900; margin-bottom: 10px; font-style: italic;
+       background: linear-gradient(to right, var(--neon-blue), var(--neon-pink));
+       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+       filter: drop-shadow(0 0 15px rgba(0, 210, 255, 0.5)); }
+  .description { font-size: 16px; color: #aaa; margin-bottom: 30px; line-height: 1.4; }
+  .best-score { font-size: 18px; color: #fff; margin-bottom: 40px; font-weight: 600; }
+  .best-score span { color: var(--neon-blue); }
+
+  .btn-container { display: flex; flex-direction: column; gap: 15px; }
+  .btn {
+    background: transparent; color: #fff; border: 2px solid var(--neon-blue);
+    padding: 16px 30px; font-size: 18px; font-weight: 800; border-radius: 4px;
+    cursor: pointer; text-transform: uppercase; letter-spacing: 2px;
+    transition: all 0.2s; box-shadow: 0 0 15px rgba(0, 210, 255, 0.2);
+    position: relative; overflow: hidden;
+  }
+  .btn::after {
+    content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+    background: linear-gradient(45deg, transparent, rgba(255,255,255,0.1), transparent);
+    transform: rotate(45deg); transition: 0.5s;
+  }
+  .btn:active { transform: scale(0.96); box-shadow: 0 0 5px var(--neon-blue); }
+  .btn-restart { border-color: var(--neon-pink); box-shadow: 0 0 15px rgba(255, 0, 255, 0.2); }
+  .btn-restart:active { box-shadow: 0 0 5px var(--neon-pink); }
+
+  /* Controls Hint */
+  #touch-hints {
+    position: absolute; bottom: 40px; left: 0; right: 0;
+    display: flex; justify-content: center; gap: 60px;
+    opacity: 0.5; pointer-events: none;
+  }
+  .hint { text-align: center; }
+  .hint-icon { font-size: 24px; margin-bottom: 5px; animation: bounce 2s infinite; }
+  @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+
+  .shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
+  @keyframes shake {
+    10%, 90% { transform: translate3d(-1px, 0, 0); }
+    20%, 80% { transform: translate3d(2px, 0, 0); }
+    30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+    40%, 60% { transform: translate3d(4px, 0, 0); }
+  }
+</style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="gameCanvas"></canvas>
+  
+  <div id="hud">
+    <div class="hud-item">
+      <div class="hud-label">Distance</div>
+      <div id="score-value" class="hud-value">0m</div>
+    </div>
+    <div class="hud-item" id="speed-container">
+      <div class="hud-label">Velocity</div>
+      <div id="speed-value" class="hud-value">0</div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <div id="start-screen" class="menu-content">
+      <h1>NEON RUNNER</h1>
+      <p class="description">Switch lanes to avoid obstacles. Speed increases over time.</p>
+      <div class="best-score">HIGH SCORE: <span id="best-start">0m</span></div>
+      <div class="btn-container">
+        <button class="btn" id="btnStart">Ignite</button>
+      </div>
+      <div id="touch-hints">
+        <div class="hint">
+          <div class="hint-icon">⬅️</div>
+          <div class="hud-label">TAP LEFT</div>
+        </div>
+        <div class="hint">
+          <div class="hint-icon">➡️</div>
+          <div class="hud-label">TAP RIGHT</div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="gameover-screen" class="menu-content" style="display: none;">
+      <h1 style="color: var(--neon-pink); filter: drop-shadow(0 0 15px rgba(255, 0, 255, 0.5));">DE-REZZED</h1>
+      <p class="description">Collision detected. System rebooting...</p>
+      <div class="best-score">DISTANCE: <span id="final-score" style="color: var(--neon-pink);">0m</span></div>
+      <div class="best-score" style="margin-top: -30px;">HIGH SCORE: <span id="best-go">0m</span></div>
+      <div class="btn-container">
+        <button class="btn btn-restart" id="btnRestart">Reboot</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // --- SDK Integration ---
+  const yt = window.ytgame || null;
+  function safe(fn) { try { return fn(); } catch (e) { console.warn(e); } }
+
+  // --- Constants & Config ---
+  const CONFIG = {
+    lanes: 3,
+    laneWidth: 100,
+    playerY: 0.8, // 80% from top
+    initialSpeed: 8,
+    maxSpeed: 25,
+    speedInc: 0.002,
+    obstacleChance: 0.02,
+    colors: {
+      player: '#00d2ff',
+      obstacle: '#ff00ff',
+      lane: 'rgba(157, 0, 255, 0.2)',
+      grid: 'rgba(0, 210, 255, 0.05)'
+    }
+  };
+
+  // --- State ---
+  let state = {
+    running: false,
+    score: 0,
+    highScore: 0,
+    speed: CONFIG.initialSpeed,
+    lane: 1, // 0, 1, 2
+    targetLane: 1,
+    playerX: 0,
+    obstacles: [],
+    particles: [],
+    lastTime: 0,
+    gridOffset: 0
+  };
+
+  // --- DOM ---
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const container = document.getElementById('game-container');
+  const scoreValue = document.getElementById('score-value');
+  const speedValue = document.getElementById('speed-value');
+  const overlay = document.getElementById('overlay');
+  const startScreen = document.getElementById('start-screen');
+  const gameOverScreen = document.getElementById('gameover-screen');
+  const btnStart = document.getElementById('btnStart');
+  const btnRestart = document.getElementById('btnRestart');
+  const bestStart = document.getElementById('best-start');
+  const bestGo = document.getElementById('best-go');
+  const finalScore = document.getElementById('final-score');
+
+  // --- Audio ---
+  let audioCtx = null;
+  function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  function playSound(freq, type, duration, vol = 0.1) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  }
+
+  // --- Resize ---
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    state.playerX = getLaneX(state.lane);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function getLaneX(lane) {
+    const center = canvas.width / (window.devicePixelRatio || 1) / 2;
+    return center + (lane - 1) * CONFIG.laneWidth;
+  }
+
+  // --- Game Logic ---
+  function spawnObstacle() {
+    if (Math.random() < CONFIG.obstacleChance + (state.speed * 0.001)) {
+      const lane = Math.floor(Math.random() * 3);
+      // Don't spawn if too close to another obstacle in the same lane
+      const lastInLane = state.obstacles.filter(o => o.lane === lane).pop();
+      if (!lastInLane || lastInLane.y > 200) {
+        state.obstacles.push({
+          lane: lane,
+          y: -50,
+          w: 60,
+          h: 30,
+          hue: Math.random() * 60 + 300 // Pink to Purple
+        });
+      }
+    }
+  }
+
+  function createExplosion(x, y, color) {
+    for (let i = 0; i < 20; i++) {
+      state.particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 10,
+        vy: (Math.random() - 0.5) * 10,
+        life: 1.0,
+        color: color
+      });
+    }
+  }
+
+  function update(dt) {
+    if (!state.running) return;
+
+    // Speed up
+    state.speed = Math.min(CONFIG.maxSpeed, state.speed + CONFIG.speedInc);
+    state.score += state.speed * 0.05;
+    
+    // Grid animation
+    state.gridOffset = (state.gridOffset + state.speed) % 100;
+
+    // Player movement
+    const targetX = getLaneX(state.targetLane);
+    state.playerX += (targetX - state.playerX) * 0.2;
+
+    // Obstacles
+    spawnObstacle();
+    for (let i = state.obstacles.length - 1; i >= 0; i--) {
+      const o = state.obstacles[i];
+      o.y += state.speed;
+
+      // Collision
+      const px = state.playerX;
+      const py = canvas.height / (window.devicePixelRatio || 1) * CONFIG.playerY;
+      const ox = getLaneX(o.lane);
+      
+      if (Math.abs(px - ox) < 40 && Math.abs(py - o.y) < 30) {
+        gameOver();
+        return;
+      }
+
+      if (o.y > canvas.height + 100) {
+        state.obstacles.splice(i, 1);
+      }
+    }
+
+    // Particles
+    for (let i = state.particles.length - 1; i >= 0; i--) {
+      const p = state.particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= 0.02;
+      if (p.life <= 0) state.particles.splice(i, 1);
+    }
+
+    // UI
+    scoreValue.innerText = Math.floor(state.score) + 'm';
+    speedValue.innerText = Math.floor(state.speed * 10);
+  }
+
+  // --- Rendering ---
+  function draw() {
+    const w = canvas.width / (window.devicePixelRatio || 1);
+    const h = canvas.height / (window.devicePixelRatio || 1);
+
+    // BG
+    ctx.fillStyle = '#050510';
+    ctx.fillRect(0, 0, w, h);
+
+    // Perspective Grid
+    ctx.strokeStyle = CONFIG.colors.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = -w; x < w * 2; x += 50) {
+      ctx.moveTo(w / 2, h * 0.2);
+      ctx.lineTo(x, h);
+    }
+    for (let y = 0; y < 20; y++) {
+      const py = h * 0.2 + Math.pow(y / 20, 2) * h * 0.8 + (state.gridOffset % 50);
+      ctx.moveTo(0, py);
+      ctx.lineTo(w, py);
+    }
+    ctx.stroke();
+
+    // Lanes
+    ctx.fillStyle = CONFIG.colors.lane;
+    for (let i = 0; i < 3; i++) {
+      const lx = getLaneX(i);
+      ctx.fillRect(lx - 45, 0, 90, h);
+      
+      // Lane Borders
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = CONFIG.colors.player;
+      ctx.strokeStyle = 'rgba(0, 210, 255, 0.3)';
+      ctx.strokeRect(lx - 45, 0, 90, h);
+    }
+    ctx.shadowBlur = 0;
+
+    // Obstacles
+    state.obstacles.forEach(o => {
+      const ox = getLaneX(o.lane);
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = CONFIG.colors.obstacle;
+      ctx.fillStyle = `hsl(${o.hue}, 100%, 50%)`;
+      
+      // Draw a "glitchy" cube
+      ctx.fillRect(ox - 30, o.y - 15, 60, 30);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(ox - 30, o.y - 15, 60, 30);
+    });
+
+    // Player
+    const py = h * CONFIG.playerY;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = CONFIG.colors.player;
+    ctx.fillStyle = CONFIG.colors.player;
+    
+    // Arrow-like ship
+    ctx.beginPath();
+    ctx.moveTo(state.playerX, py - 30);
+    ctx.lineTo(state.playerX - 25, py + 15);
+    ctx.lineTo(state.playerX, py + 5);
+    ctx.lineTo(state.playerX + 25, py + 15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Particles
+    state.particles.forEach(p => {
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 4, 4);
+    });
+    ctx.globalAlpha = 1.0;
+    ctx.shadowBlur = 0;
+  }
+
+  function loop(time) {
+    const dt = time - state.lastTime;
+    state.lastTime = time;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // --- Game Flow ---
+  function startGame() {
+    initAudio();
+    state.running = true;
+    state.score = 0;
+    state.speed = CONFIG.initialSpeed;
+    state.obstacles = [];
+    state.particles = [];
+    state.targetLane = 1;
+    state.lane = 1;
+    state.playerX = getLaneX(1);
+    
+    overlay.classList.add('hidden');
+    setTimeout(() => {
+      startScreen.style.display = 'none';
+      gameOverScreen.style.display = 'none';
+    }, 300);
+
+    safe(() => yt && yt.game && yt.game.gameStart());
+    playSound(440, 'square', 0.2);
+  }
+
+  function gameOver() {
+    state.running = false;
+    container.classList.add('shake');
+    setTimeout(() => container.classList.remove('shake'), 400);
+    
+    if (state.score > state.highScore) {
+      state.highScore = Math.floor(state.score);
+      saveData();
+    }
+
+    finalScore.innerText = Math.floor(state.score) + 'm';
+    bestGo.innerText = state.highScore + 'm';
+    
+    gameOverScreen.style.display = 'block';
+    overlay.classList.remove('hidden');
+
+    createExplosion(state.playerX, canvas.height / (window.devicePixelRatio || 1) * CONFIG.playerY, CONFIG.colors.player);
+    playSound(110, 'sawtooth', 0.5, 0.2);
+    
+    safe(() => yt && yt.game && yt.game.gameRestart());
+  }
+
+  // --- Persistence ---
+  function saveData() {
+    const data = JSON.stringify({ highScore: state.highScore });
+    safe(() => {
+      if (yt && yt.storage) {
+        yt.storage.saveData(data);
+      } else {
+        localStorage.setItem('neon-runner-data', data);
+      }
+    });
+  }
+
+  function loadData() {
+    safe(() => {
+      if (yt && yt.storage) {
+        yt.storage.loadData().then(data => {
+          if (data) {
+            const parsed = JSON.parse(data);
+            state.highScore = parsed.highScore || 0;
+            bestStart.innerText = state.highScore + 'm';
+          }
+        });
+      } else {
+        const data = localStorage.getItem('neon-runner-data');
+        if (data) {
+          const parsed = JSON.parse(data);
+          state.highScore = parsed.highScore || 0;
+          bestStart.innerText = state.highScore + 'm';
+        }
+      }
+    });
+  }
+
+  // --- Input ---
+  function handleInput(e) {
+    if (!state.running) return;
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    const w = window.innerWidth;
+    
+    if (x < w / 2) {
+      state.targetLane = Math.max(0, state.targetLane - 1);
+      playSound(660, 'sine', 0.05);
+    } else {
+      state.targetLane = Math.min(2, state.targetLane + 1);
+      playSound(880, 'sine', 0.05);
+    }
+  }
+
+  window.addEventListener('touchstart', (e) => {
+    if (state.running) handleInput(e);
+  });
+  window.addEventListener('mousedown', (e) => {
+    if (state.running) handleInput(e);
+  });
+  window.addEventListener('keydown', (e) => {
+    if (!state.running) return;
+    if (e.key === 'ArrowLeft') state.targetLane = Math.max(0, state.targetLane - 1);
+    if (e.key === 'ArrowRight') state.targetLane = Math.min(2, state.targetLane + 1);
+  });
+
+  btnStart.addEventListener('click', startGame);
+  btnRestart.addEventListener('click', startGame);
+
+  // --- Init ---
+  loadData();
+  requestAnimationFrame(loop);
+  
+  // Health check
+  setInterval(() => {
+    safe(() => yt && yt.health && yt.health.logHealth());
+  }, 1000);
+
+})();
+</script>
+</body>
+</html>
