@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Neon Runner</title>
-<!-- The Playables SDK must load first. It is the only external request allowed. -->
+<!-- Monetization & Ad SDK Abstraction Layer -->
+<script src="./monetization.js"></script>
+<!-- The Playables SDK (optional, guarded for web portals) -->
 <script src="https://www.youtube.com/game_api/v1"></script>
 <style>
   :root {
@@ -136,6 +138,7 @@
       <div class="best-score">DISTANCE: <span id="final-score" style="color: var(--neon-pink);">0m</span></div>
       <div class="best-score" style="margin-top: -30px;">HIGH SCORE: <span id="best-go">0m</span></div>
       <div class="btn-container">
+        <button class="btn" id="btnRevive" style="border-color: #c084fc; box-shadow: 0 0 15px rgba(192, 132, 252, 0.4); color: #fff;">⚡ Revive (Watch Ad)</button>
         <button class="btn btn-restart" id="btnRestart">Reboot</button>
       </div>
     </div>
@@ -393,12 +396,30 @@
     ctx.shadowBlur = 0;
   }
 
+  let isPaused = false;
+  let rafId = 0;
+  let canRevive = true;
+
+  function setGamePaused(pause) {
+    if (pause === isPaused) return;
+    isPaused = pause;
+    if (pause) {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (audioCtx && audioCtx.state === 'running') audioCtx.suspend();
+    } else {
+      state.lastTime = performance.now();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      if (!rafId) rafId = requestAnimationFrame(loop);
+    }
+  }
+
   function loop(time) {
+    if (isPaused) return;
     const dt = time - state.lastTime;
     state.lastTime = time;
     update(dt);
     draw();
-    requestAnimationFrame(loop);
+    rafId = requestAnimationFrame(loop);
   }
 
   // --- Game Flow ---
@@ -412,6 +433,7 @@
     state.targetLane = 1;
     state.lane = 1;
     state.playerX = getLaneX(1);
+    canRevive = true;
     
     overlay.classList.add('hidden');
     setTimeout(() => {
@@ -421,6 +443,22 @@
 
     safe(() => yt && yt.game && yt.game.gameStart());
     playSound(440, 'square', 0.2);
+  }
+
+  function revivePlayer() {
+    initAudio();
+    state.running = true;
+    canRevive = false;
+    // Clear obstacles around the collision zone
+    const py = canvas.height / (window.devicePixelRatio || 1) * CONFIG.playerY;
+    state.obstacles = state.obstacles.filter(o => Math.abs(o.y - py) > 200);
+    
+    overlay.classList.add('hidden');
+    setTimeout(() => {
+      gameOverScreen.style.display = 'none';
+    }, 300);
+
+    playSound(880, 'sine', 0.2, 0.2);
   }
 
   function gameOver() {
@@ -436,6 +474,11 @@
     finalScore.innerText = Math.floor(state.score) + 'm';
     bestGo.innerText = state.highScore + 'm';
     
+    const btnRevive = document.getElementById('btnRevive');
+    if (btnRevive) {
+      btnRevive.style.display = canRevive ? 'block' : 'none';
+    }
+
     gameOverScreen.style.display = 'block';
     overlay.classList.remove('hidden');
 
@@ -506,11 +549,50 @@
   });
 
   btnStart.addEventListener('click', startGame);
-  btnRestart.addEventListener('click', startGame);
+  btnRestart.addEventListener('click', () => {
+    if (window.AdManager) {
+      AdManager.showMidroll(() => startGame());
+    } else {
+      startGame();
+    }
+  });
+
+  const btnRevive = document.getElementById('btnRevive');
+  if (btnRevive) {
+    btnRevive.addEventListener('click', () => {
+      if (window.AdManager) {
+        AdManager.showRewarded(
+          () => revivePlayer(),
+          () => { alert('Rewarded ad incomplete.'); }
+        );
+      } else {
+        revivePlayer();
+      }
+    });
+  }
+
+  // --- Visibility & Lifecycle Hooks ---
+  document.addEventListener('visibilitychange', () => {
+    setGamePaused(document.hidden);
+  });
+  window.addEventListener('blur', () => setGamePaused(true));
+  window.addEventListener('focus', () => {
+    if (!document.hidden) setGamePaused(false);
+  });
+
+  if (window.AdManager) {
+    AdManager.onPauseGame(() => setGamePaused(true));
+    AdManager.onResumeGame(() => {
+      if (!document.hidden) setGamePaused(false);
+    });
+  }
 
   // --- Init ---
+  if (window.AdManager) {
+    AdManager.init();
+  }
   loadData();
-  requestAnimationFrame(loop);
+  rafId = requestAnimationFrame(loop);
   
   // Health check
   setInterval(() => {
